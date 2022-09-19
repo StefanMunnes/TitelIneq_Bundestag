@@ -24,6 +24,22 @@ df_notext <- select(pt_smpl, !text)
 
 members <- readRDS("../data/members.RDS")
 
+members_correct <- filter(
+  members %in% c(
+    "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
+    "Jaeger"
+  )
+) |>
+  mutate(nachname = case_when(
+    nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
+    nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
+    nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
+    nachname == "Jaeger" ~ "jaeger" # wrong in text
+  ))
+
+members <- bind_rows(members, members_correct)
+
+
 
 get_regex_names <- function(w) {
   filter(members, wp == w) |>
@@ -50,12 +66,16 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
     .{0,50}?[0-9]{4,4}            # date till year
     ", comments = TRUE, dotall = TRUE)
 
-  # remove page numbering around header (front or back)
+  text_raw <- str_replace_all(text_raw, regex_header_base, "\nHEADER\n")
+
+
+  # remove page numbering around header (front or back) & space/dot/pagebreak
   regex_header_page <- regex("
-    ([0-9]{1,6}[.,\\s]{1,8})? # page num & space/dot/pagebreak before header
+    ([0-9]{1,7}[0-9A-Z ]{1,7}[.,\\s]{1,8})? # before header
     HEADER
-    ([.,\\s]{1,7}[0-9]{1,8})? # page num & space/dot/pagebreak behind header
+    ([.,\\s]{1,8}[0-9A-Z ]{1,7}[0-9]{1,7})? # behind header
     ", comments = TRUE)
+
 
   text_raw <- str_replace_all(text_raw, regex_header_page, "\nHEADER\n")
 
@@ -75,7 +95,7 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
     # e.g. HEADER\n Pau; (Pau); (Pau [Berlin]);  Pau (Berlin)
     text_raw <- gsub(
       paste0(
-        "\\n+HEADER\\s+.{0,30}?",
+        "\\n+HEADER\\s+.{0,42}?",
         "(", rex_name, ")",
         "(?!.*(:|Staatssekretär))", # anything behind name except speaker signs
         "((\\s(\\[|\\().*?(\\]|\\)))*\\)*\\s*)*"
@@ -86,7 +106,7 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
     )
   } else { # names in front of header: e.g. \nDr. Anton Hofreiter\nHEADER
     text_raw <- gsub(
-      paste0("\\n.{0,30}(", rex_name, ").{0,20}\\n+HEADER\\n+"),
+      paste0("\\n.{0,40}(", rex_name, ").{0,20}\\n+HEADER\\n+"),
       "\nHEADER\n",
       text_raw,
       perl = TRUE
@@ -95,9 +115,10 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
 
 
   # remove HEADER
-  text_nohead <- str_remove_all(text_raw, "HEADER")
+  # text_nohead <- str_remove_all(text_raw, "HEADER")
 
-  return(text_nohead)
+  return(text_raw)
+  # return(text_nohead)
 }
 
 
@@ -113,7 +134,7 @@ regex_start <- regex(
 wp <- 1
 regex_n <- get_regex_names(wp)
 
-test <- lapply(seq_len(nrow(pt_smpl)), function(row) { # seq_len(nrow(pt_smpl))
+pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
 
   # check wahlperiode -> prepare names for clean-up
   if (pt_smpl$wahlperiode[row] > wp) {
@@ -162,9 +183,13 @@ test <- lapply(seq_len(nrow(pt_smpl)), function(row) { # seq_len(nrow(pt_smpl))
 
   # # remove unecessary linebreaks and space
   text <- str_remove_all(text, "-\\n+(?=[:lower:])") |> # word split
-    str_replace_all(c(" *\\n+ *\\(" = "\n(", "\\) *\\n+ *" = ")\n")) #|>
-  # str_replace_all("(?<=[^:)])\\n+(?=[^(])", " ") |> # keep around paranteheses
-  # str_replace_all(" +", " ") # trim whitespace to single one
+    # multiple spaces/linebreaks before/after parantheses to
+    str_replace_all(c(
+      " *\\n+ *\\(" = "\n(",
+      "\\) *\\n+ *" = ")\n"
+    )) |>
+    str_remove_all(" (?=-[A-ZÖÄÜ])") |> # wrong space before -
+    str_replace_all(" +", " ") # trim whitespace to single one
 
 
   # # remove comments (in text)
@@ -177,16 +202,27 @@ test <- lapply(seq_len(nrow(pt_smpl)), function(row) { # seq_len(nrow(pt_smpl))
   #  speaker: begin of speech: from newline to : with name (keywords/paranth.)
   regex_speaker <- regex(
     paste0(
-      "\\n(", # begin with linebreak and first group
-      "[^\\n]{0,30}?", # take everything before, without linebreak
-      "(", regex_n, ")", # member names of Wahlperiode
-      "[^\\n]{0,25}?", # space/comma after name,before additional words(?!.*\\2)
-      "(((Minister|Bundesminister|Staatssekretär).{0,45}?)|", # longer keywords
-      "(Antragsteller|Anfragender|Berichterstatter|Schriftführer|", # keywords
-      "(\\(.{0,35}\\))).{0,5})?", # filled parantheses (city/party)
-      "):" # end first group before :
+      "\\n(", # begin of first group to keep after linebreak
+      # 1. max 15 signs before name OR
+      "([^\\n:]{0,15}|",
+      # 2. if one of the keywords -> 15 + kw + 22 before
+      "([^\\n:]{0,15}?",
+      "((Vize)*[Pp]räsident|Herr|Frau|Dr|(Staats|Bundes)*[Mm]inister|Staatssekretär)",
+      "[^\\n:]{0,22}?))",
+      # all surnames of wp in or parantheses
+      "(", regex_n, ")",
+      # just max 3 signs between name and : or following optional keywords
+      "[^\\n:]{0,3}?",
+      # 1. if one of the keywords -> 20 + kw + 75 signs (also newline) OR
+      "(([^:]{0,20}?((Staats|Bundes)*[Mm]inister|Staatssekretär).{0,75}?)|",
+      # 2. if one of the keywords -> max 3 additional signs OR
+      "((Antragsteller|Anfragender|Berichterstatter|Schriftführer).{0,3})|",
+      # 3. if parantheses behind name (party; city) -> both max 40 + add 3
+      "(\\([^\\n:]{0,40}\\).{0,3}?)",
+      ")*", # close optional keyword/parantheses
+      "):" # end main group to keep before :
     ),
-    dotall = TRUE, comments = TRUE
+    dotall = TRUE
   )
 
   text <- str_replace_all(text, regex_speaker, "\nSPLIT1\\1SPLIT2\n") |>
@@ -196,22 +232,33 @@ test <- lapply(seq_len(nrow(pt_smpl)), function(row) { # seq_len(nrow(pt_smpl))
 })
 
 
-saveRDS(test, file = "../data/tmp_smpl.RDS")
-test <- readRDS("../data/tmp_smpl.RDS")
+saveRDS(pt_prep, file = "../data/tmp_smpl.RDS")
+pt_prep <- readRDS("../data/tmp_smpl.RDS")
 
-c <- test[[2]]
+c <- pt_prep[[2]]
 View(c)
 
-fileConn <- file("../data/tmp_smpl.txt")
-writeLines(test[[18]], fileConn) # test[[1]]  df_smpl$text[15]
-#writeLines(pt_smpl$text[[3]], fileConn) # test[[1]]  df_smpl$text[15]
-close(fileConn)
+
+textout <- function(num) {
+  file <- file("../data/tmp_smpl.txt")
+  writeLines(pt_prep[[num]], file) # pt_prep[[1]]  df_smpl$text[15]
+  close(file)
+}
+
+textout(7)
+
+a <- pt_smpl$text[18]
+View(a)
 
 
+b <- str_detect(pt_smpl$text[4], "Kalinke")
+
+
+# ! check: Vizepräsident etc. speaker wrong Name?
 # ! check: text 38: Amira Mohamed Ali
 
 
-Text 10: Dr. von Manger-Koenig, Staatssekret�r im Bundesministerium f�r Gesundheitswesen
+# Text 10: Dr. von Manger-Koenig, Staatssekret�r im Bundesministerium f�r Gesundheitswesen
 
 
 library(quanteda)
