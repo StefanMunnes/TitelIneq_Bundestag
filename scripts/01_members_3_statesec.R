@@ -140,7 +140,17 @@ statesec_1_5 <- read.csv2("../data/state_secretary_1-5.csv",
   select(nachname, vorname, adel, praefix, wp, type)
 
 
-statesec <- bind_rows(statesec_wiki, statesec_1_5)
+
+statesec_missing <- data.frame(
+  nachname = c("Manger-Koenig", "Manger-Koenig"),
+  vorname = c("Ludwig", "Ludwig"),
+  praefix = c("von", "von"),
+  wp = c(6, 7),
+  type = c("state secretary", "state secretary")
+)
+
+
+statesec <- bind_rows(statesec_wiki, statesec_1_5, statesec_missing)
 
 
 saveRDS(statesec, file = "../data/statesec.RDS")
