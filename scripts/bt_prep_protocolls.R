@@ -25,7 +25,8 @@ df_notext <- select(pt_smpl, !text)
 members <- readRDS("../data/members.RDS")
 
 members_correct <- filter(
-  members %in% c(
+  members,
+  nachname %in% c(
     "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
     "Jaeger"
   )
@@ -83,14 +84,13 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
   # sub-page marking under header later WPs)
   regex_header_subh <- regex("
     (\\([A-D]\\) # one of first four uppercase letters in parantheses
-    \\s*)        # additional space/linebreak
+    [:blank:]*)  # additional space/tan, no linebreak
     ", comments = TRUE)
 
   text_raw <- str_remove_all(text_raw, regex_header_subh)
 
 
   # remove name of speaker under/above header if splited speech
-
   if (wp < 18) { # WP 1- WP 17: names behind header:
     # e.g. HEADER\n Pau; (Pau); (Pau [Berlin]);  Pau (Berlin)
     text_raw <- gsub(
@@ -115,10 +115,11 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
 
 
   # remove HEADER
-  # text_nohead <- str_remove_all(text_raw, "HEADER")
+  text_nohead <- str_remove_all(text_raw, "-\\s+HEADER\\s+") |>
+    str_replace_all("\\s+HEADER\\s+", "\n")
 
-  return(text_raw)
-  # return(text_nohead)
+
+  return(text_nohead)
 }
 
 
@@ -134,7 +135,7 @@ regex_start <- regex(
 wp <- 1
 regex_n <- get_regex_names(wp)
 
-pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
+pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
 
   # check wahlperiode -> prepare names for clean-up
   if (pt_smpl$wahlperiode[row] > wp) {
@@ -177,12 +178,9 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
   text <- gsub("\\n\\*+\\)\\sSiehe Anlage\\s[0-9]+\\.*\\s*", "", text)
 
 
-  # remove header (with pages, names, and sub-page-markers)
-  text <- remove_header(text)
-
-
   # # remove unecessary linebreaks and space
-  text <- str_remove_all(text, "-\\n+(?=[:lower:])") |> # word split
+  text <- str_remove_all(text, "-\\n+(?=[:lower:])") |> # word split in lower
+    str_remove_all("(?<=[A-ZÄÖÜ])-\\n+(?=[A-ZÄÖÜ])") |> # word split UPPER
     # multiple spaces/linebreaks before/after parantheses to
     str_replace_all(c(
       " *\\n+ *\\(" = "\n(",
@@ -192,17 +190,21 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
     str_replace_all(" +", " ") # trim whitespace to single one
 
 
-  # # remove comments (in text)
+  # mark comments (including names of members); min 5; just last parantheses
   text <- str_replace_all(
     text,
-    regex("\\n\\(.*?\\)\\n", dotall = TRUE),
+    regex("\\n?\\(.{5,}?\\)\\n", dotall = TRUE),
     "\nZWISCHENRUF\n"
   )
 
-  #  speaker: begin of speech: from newline to : with name (keywords/paranth.)
+  # remove header (with pages, names, and sub-page-markers)
+  text <- remove_header(text)
+
+
+  #  speaker I: begin of speech: from newline to : with name (keywords/parant.)
   regex_speaker <- regex(
     paste0(
-      "\\n(", # begin of first group to keep after linebreak
+      "\\n(", # begin of 1 group to keep after linebreak
       # 1. max 15 signs before name OR
       "([^\\n:]{0,15}|",
       # 2. if one of the keywords -> 15 + kw + 22 before
@@ -212,11 +214,11 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
       # all surnames of wp in or parantheses
       "(", regex_n, ")",
       # just max 3 signs between name and : or following optional keywords
-      "[^\\n:]{0,3}?",
+      "[^\\n]{0,3}?",
       # 1. if one of the keywords -> 20 + kw + 75 signs (also newline) OR
-      "(([^:]{0,20}?((Staats|Bundes)*[Mm]inister|Staatssekretär).{0,75}?)|",
+      "(([^:]{0,20}?((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator).{0,75}?)|",
       # 2. if one of the keywords -> max 3 additional signs OR
-      "((Antragsteller|Anfragender|Berichterstatter|Schriftführer).{0,3})|",
+      "((Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant).{0,3})|",
       # 3. if parantheses behind name (party; city) -> both max 40 + add 3
       "(\\([^\\n:]{0,40}\\).{0,3}?)",
       ")*", # close optional keyword/parantheses
@@ -228,6 +230,20 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
   text <- str_replace_all(text, regex_speaker, "\nSPLIT1\\1SPLIT2\n") |>
     str_replace("(^.*?:)", "\\1SPLIT2") # first speaker
 
+
+  # speaker II: detect speakers that not appear with name from members list
+  regex_speaker_noname <- regex(
+    "\\n(?!SPLIT)( # begin of first group to keep after linebreak; no SPLIT
+    [^\\n:]{0,25}? # max 15 signs before Keywords
+    ((,\\s+((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator))| # Keywords OR
+    \\([^\\n:]{0,30}\\)) # paranthese
+    [^:]{0,35}? # max 35 signs behind Minister, without :
+    )(?<!\\b[a-zäöüß]{1,10}): # end 1 group to keep before NO lowercase word :",
+    dotall = TRUE, comments = TRUE
+  )
+
+  text <- str_replace_all(text, regex_speaker_noname, "\nSPLIT1XXX\\1SPLIT2\n")
+
   return(text)
 })
 
@@ -235,7 +251,7 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
 saveRDS(pt_prep, file = "../data/tmp_smpl.RDS")
 pt_prep <- readRDS("../data/tmp_smpl.RDS")
 
-c <- pt_prep[[2]]
+c <- pt_prep[[7]]
 View(c)
 
 
@@ -245,9 +261,9 @@ textout <- function(num) {
   close(file)
 }
 
-textout(7)
+textout(1)
 
-a <- pt_smpl$text[18]
+a <- pt_smpl$text[30]
 View(a)
 
 
@@ -258,66 +274,14 @@ b <- str_detect(pt_smpl$text[4], "Kalinke")
 # ! check: text 38: Amira Mohamed Ali
 
 
-# Text 10: Dr. von Manger-Koenig, Staatssekret�r im Bundesministerium f�r Gesundheitswesen
-
 
 library(quanteda)
 
-test2 <- tokens(corpus(unlist(test[11:21])))
+test2 <- tokens(corpus(unlist(pt_prep)))
 test3 <- kwic(test2, ":", window = 10)
-test5 <- kwic(tokens(corpus(unlist(test))), "Staatssek*", window = 15)
 
 
 
 
 
-
-
-# Nach HEADER: 1, 2
-# Vor HEADER:
-
-# WP 1 - immer nach HEADER
-# (Dr. Menzel)
-# (Präsident Dr. Ehlers)
-# (Bundesinnenminister Dr. Dr. h. c. Lehr)
-# (Dr. Etzel [Bamberg])
-# (Rademacher)
-# (Vizepräsident Dr. Schmid)
-# (Bundesminister Storch)
-
-# WP 2
-# (Präsident D. Dr. Ehlers)
-# (Staatssekretär Dr. Westrick)
-# (Kühn [Köln])
-# (Bundesminister Dr. Wuermeling)
-
-# WP 7
-# Vizepräsident von Hassel
-# Leicht
-# Dr. h. c. Dr.-Ing. E. h. Möller
-# Wittmann (Straubing)
-# Vizepräsident Dr. Jaeger
-
-# WP 11
-# Frau Vennegerts
-# Staatsminister Krollmann (Hessen)
-# Bundesminister Dr. Wallmann
-# Kleinert (Marburg)
-# Mischnick
-# Dr. Hauff
-
-# WP 14
-# Staatsminister Dr. Ludger Volmer
-# Dr. Peter Struck
-# Ministerpräsident Dr. Bernhard Vogel (Thüringen)
-
-# WP 19
-# Präsident Dr. Wolfgang Schäuble
-# Beatrix von Storch
-# Dr. Silke Launert
-# Sonja Amalie Steffen
-# Vizepräsident Thomas Oppermann
-# Sandra Weeser
-# Dr. Rainer Kraft
-# Parl. Staatssekretärin Rita Schwarzelühr-Sutter
-# Parl Staatssekretärin bei der Bundesministerin für Umwelt, Naturschutz, Bau und Reaktorsicherheit
+# Wrong Names: Honig zu Harig
