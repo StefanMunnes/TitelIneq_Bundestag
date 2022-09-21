@@ -16,6 +16,8 @@ setwd("scripts/")
 
 pt_smpl <- readRDS("../data/pt_smpl.RDS")
 
+set.seed(1245)
+
 pt_smpl <- group_by(pt_smpl, wahlperiode) |>
   slice_sample(n = 2)
 
@@ -24,21 +26,21 @@ df_notext <- select(pt_smpl, !text)
 
 members <- readRDS("../data/members.RDS")
 
-members_correct <- filter(
-  members,
-  nachname %in% c(
-    "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
-    "Jaeger"
-  )
-) |>
-  mutate(nachname = case_when(
-    nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
-    nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
-    nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
-    nachname == "Jaeger" ~ "jaeger" # wrong in text
-  ))
+# members_correct <- filter(
+#   members,
+#   nachname %in% c(
+#     "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
+#     "Jaeger"
+#   )
+# ) |>
+#   mutate(nachname = case_when(
+#     nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
+#     nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
+#     nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
+#     nachname == "Jaeger" ~ "jaeger" # wrong in text
+#   ))
 
-members <- bind_rows(members, members_correct)
+# members <- bind_rows(members, members_correct)
 
 
 
@@ -135,7 +137,7 @@ regex_start <- regex(
 wp <- 1
 regex_n <- get_regex_names(wp)
 
-pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
+pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
 
   # check wahlperiode -> prepare names for clean-up
   if (pt_smpl$wahlperiode[row] > wp) {
@@ -167,7 +169,7 @@ pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
 
 
   # remove end of session and everythin behind (e.g. appendix)
-  # (Schlu� der 'Sitzung: 21.04 Uhr.)
+  # (Schluß der 'Sitzung: 21.04 Uhr.)
   text <- gsub(
     "\\n\\(Schlu(ss|ß)( der [']*Sitzung)*:*.{,4}[0-9]+\\s*Uhr.{,20}\\).*?$",
     "", text
@@ -193,7 +195,7 @@ pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
   # mark comments (including names of members); min 5; just last parantheses
   text <- str_replace_all(
     text,
-    regex("\\n?\\(.{5,}?\\)\\n", dotall = TRUE),
+    regex("\\n?\\([^\\(]*?\\)\\n|\\n\\([^\\(]{18,}?\\)", dotall = TRUE),
     "\nZWISCHENRUF\n"
   )
 
@@ -209,7 +211,7 @@ pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
       "([^\\n:]{0,15}|",
       # 2. if one of the keywords -> 15 + kw + 22 before
       "([^\\n:]{0,15}?",
-      "((Vize)*[Pp]räsident|Herr|Frau|Dr|(Staats|Bundes)*[Mm]inister|Staatssekretär)",
+      "((Vize)*[Pp]räsident|Herr|Frau|Dr|(Staats|Bundes)*[Mm]inister|Staatssekretär|Freiherr|Prinz|Graf)",
       "[^\\n:]{0,22}?))",
       # all surnames of wp in or parantheses
       "(", regex_n, ")",
@@ -220,7 +222,8 @@ pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
       # 2. if one of the keywords -> max 3 additional signs OR
       "((Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant).{0,3})|",
       # 3. if parantheses behind name (party; city) -> both max 40 + add 3
-      "(\\([^\\n:]{0,40}\\).{0,3}?)",
+      "(\\([^\\n:]{0,40}\\).{0,3}?|", # without : before and in ()
+      ".{0,3}?\\([^\\n]{0,7}\\).{0,3}?)", # OR with : but max 3 before ()
       ")*", # close optional keyword/parantheses
       "):" # end main group to keep before :
     ),
@@ -233,11 +236,11 @@ pt_prep <- lapply(30:38, function(row) { # seq_len(nrow(pt_smpl))
 
   # speaker II: detect speakers that not appear with name from members list
   regex_speaker_noname <- regex(
-    "\\n(?!SPLIT)( # begin of first group to keep after linebreak; no SPLIT
+    "\\n(?!SPLIT|\\s*\\()( # begin of first group to keep after linebreak; no SPLIT
     [^\\n:]{0,25}? # max 15 signs before Keywords
     ((,\\s+((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator))| # Keywords OR
     \\([^\\n:]{0,30}\\)) # paranthese
-    [^:]{0,35}? # max 35 signs behind Minister, without :
+    [^:]{0,40}? # max 40 signs behind keyword/parantheses, without :
     )(?<!\\b[a-zäöüß]{1,10}): # end 1 group to keep before NO lowercase word :",
     dotall = TRUE, comments = TRUE
   )
@@ -261,9 +264,9 @@ textout <- function(num) {
   close(file)
 }
 
-textout(1)
+textout(19)
 
-a <- pt_smpl$text[30]
+a <- pt_smpl$text[19]
 View(a)
 
 
@@ -278,9 +281,15 @@ b <- str_detect(pt_smpl$text[4], "Kalinke")
 library(quanteda)
 
 test2 <- tokens(corpus(unlist(pt_prep)))
-test3 <- kwic(test2, ":", window = 10)
+test3 <- kwic(test2, "SPLIT1", window = 10)
 
 
+# ! check Text 19: wrong Split just name
+# Wir stellen uns hier Fehlentwicklungen und �ben
+# auch Selbstkritik. Ich m�chte zu Ihnen sagen, Herr
+# SPLIT1SchilySPLIT2
+#  Die Kritik der GR�NEN am Verhalten der
+# Koalitionsparteien im Au
 
 
 
