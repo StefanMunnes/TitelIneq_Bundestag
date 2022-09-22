@@ -2,6 +2,7 @@ library(dplyr)
 library(tidyr)
 library(stringr)
 
+
 setwd("scripts/")
 
 
@@ -19,7 +20,8 @@ pt_smpl <- readRDS("../data/pt_smpl.RDS")
 set.seed(1245)
 
 pt_smpl <- group_by(pt_smpl, wahlperiode) |>
-  slice_sample(n = 2)
+  slice_sample(n = 2) |>
+  ungroup()
 
 df_notext <- select(pt_smpl, !text)
 
@@ -137,7 +139,7 @@ regex_start <- regex(
 wp <- 1
 regex_n <- get_regex_names(wp)
 
-pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
+pt_prep <- lapply(1:19, function(row) { # seq_len(nrow(pt_smpl))
 
   # check wahlperiode -> prepare names for clean-up
   if (pt_smpl$wahlperiode[row] > wp) {
@@ -210,15 +212,17 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
       # 1. max 15 signs before name OR
       "([^\\n:]{0,15}|",
       # 2. if one of the keywords -> 15 + kw + 22 before
-      "([^\\n:]{0,15}?",
+      "([^\\n:]{0,15}",
       "((Vize)*[Pp]räsident|Herr|Frau|Dr|(Staats|Bundes)*[Mm]inister|Staatssekretär|Freiherr|Prinz|Graf)",
-      "[^\\n:]{0,22}?))",
+      "[^\\n:]{0,22}))",
+      # Abgeordnete not allowed to appear before name
+      "(?<!Abgeordnete.{0,35})",
       # all surnames of wp in or parantheses
       "(", regex_n, ")",
       # just max 3 signs between name and : or following optional keywords
-      "[^\\n]{0,3}?",
+      "[^\\n.]{0,3}?",
       # 1. if one of the keywords -> 20 + kw + 75 signs (also newline) OR
-      "(([^:]{0,20}?((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator).{0,75}?)|",
+      "(([^:.]{0,20}?((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator).{0,75}?)|",
       # 2. if one of the keywords -> max 3 additional signs OR
       "((Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant).{0,3})|",
       # 3. if parantheses behind name (party; city) -> both max 40 + add 3
@@ -231,30 +235,44 @@ pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
   )
 
   text <- str_replace_all(text, regex_speaker, "\nSPLIT1\\1SPLIT2\n") |>
-    str_replace("(^.*?:)", "\\1SPLIT2") # first speaker
+    str_replace("(^.*?):", "\\1SPLIT2") # first initial speaker (no linebreak)
 
 
   # speaker II: detect speakers that not appear with name from members list
   regex_speaker_noname <- regex(
-    "\\n(?!SPLIT|\\s*\\()( # begin of first group to keep after linebreak; no SPLIT
-    [^\\n:]{0,25}? # max 15 signs before Keywords
+    # begin of first group to keep after linebreak; no SPLIT, (, and Abgeordnete
+    "\\n(?!SPLIT|\\s*\\(|.{0,35}Abgeordnete)(
+    [^\\n:?]{0,25}? # max 15 signs before Keywords
     ((,\\s+((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator))| # Keywords OR
     \\([^\\n:]{0,30}\\)) # paranthese
-    [^:]{0,40}? # max 40 signs behind keyword/parantheses, without :
+    [^:?]{0,40}? # max 40 signs behind keyword/parantheses, without :
     )(?<!\\b[a-zäöüß]{1,10}): # end 1 group to keep before NO lowercase word :",
     dotall = TRUE, comments = TRUE
   )
 
   text <- str_replace_all(text, regex_speaker_noname, "\nSPLIT1XXX\\1SPLIT2\n")
 
-  return(text)
+
+  # split text in speeches and separate speaker in rows
+  split_ls <- str_split(text, "SPLIT1")
+
+  split_df <- as.data.frame(split_ls, col.names = "text") |>
+    separate(text, into = c("speaker", "text"), sep = "SPLIT2") |>
+    cbind(pt_smpl[row, c("id", "pdf_url", "wahlperiode", "datum", "titel")])
+
+
+  return(split_df)
 })
 
 
 saveRDS(pt_prep, file = "../data/tmp_smpl.RDS")
 pt_prep <- readRDS("../data/tmp_smpl.RDS")
 
-c <- pt_prep[[7]]
+
+b <- bind_rows(pt_prep)
+
+
+c <- pt_prep[[2]]
 View(c)
 
 
@@ -264,9 +282,9 @@ textout <- function(num) {
   close(file)
 }
 
-textout(19)
+textout(2)
 
-a <- pt_smpl$text[19]
+a <- pt_smpl$text[90]
 View(a)
 
 
