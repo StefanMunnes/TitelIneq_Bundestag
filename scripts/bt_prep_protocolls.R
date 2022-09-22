@@ -139,7 +139,7 @@ regex_start <- regex(
 wp <- 1
 regex_n <- get_regex_names(wp)
 
-pt_prep <- lapply(1:19, function(row) { # seq_len(nrow(pt_smpl))
+?pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
 
   # check wahlperiode -> prepare names for clean-up
   if (pt_smpl$wahlperiode[row] > wp) {
@@ -214,15 +214,15 @@ pt_prep <- lapply(1:19, function(row) { # seq_len(nrow(pt_smpl))
       # 2. if one of the keywords -> 15 + kw + 22 before
       "([^\\n:]{0,15}",
       "((Vize)*[Pp]räsident|Herr|Frau|Dr|(Staats|Bundes)*[Mm]inister|Staatssekretär|Freiherr|Prinz|Graf)",
-      "[^\\n:]{0,22}))",
-      # Abgeordnete not allowed to appear before name
-      "(?<!Abgeordnete.{0,35})",
+      "[^:]{0,22}))", # \\n removed: check
+      # Abgeordnete and linkebreak not allowed to appear before name
+      "(?<!Abgeordnete.{1,35}?[^\\n])",
       # all surnames of wp in or parantheses
       "(", regex_n, ")",
       # just max 3 signs between name and : or following optional keywords
       "[^\\n.]{0,3}?",
       # 1. if one of the keywords -> 20 + kw + 75 signs (also newline) OR
-      "(([^:.]{0,20}?((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator).{0,75}?)|",
+      "(([^:.]{0,20}?((Staats|Bundes)*[Mm]inister|(Parl\\.\\s*)Staatssekretär|Senator).{0,75}?)|",
       # 2. if one of the keywords -> max 3 additional signs OR
       "((Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant).{0,3})|",
       # 3. if parantheses behind name (party; city) -> both max 40 + add 3
@@ -240,11 +240,13 @@ pt_prep <- lapply(1:19, function(row) { # seq_len(nrow(pt_smpl))
 
   # speaker II: detect speakers that not appear with name from members list
   regex_speaker_noname <- regex(
-    # begin of first group to keep after linebreak; no SPLIT, (, and Abgeordnete
-    "\\n(?!SPLIT|\\s*\\(|.{0,35}Abgeordnete)(
+    "\\n # begin of first group to keep after linebreak;
+    # no ( in Beginning; noSPLIT, Abgeordnete, Drucksache or . before linebreak
+    (?!\\s*\\(|.{1,35}SPLIT|.{1,35}Abgeordnete|.{1,35}Drucksache|.{1,35}\\.[:space:]*\\n)
+    ( # start of 1 group to keep
     [^\\n:?]{0,25}? # max 15 signs before Keywords
     ((,\\s+((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator))| # Keywords OR
-    \\([^\\n:]{0,30}\\)) # paranthese
+    \\([^\\n:]{0,50}?\\)) # paranthese
     [^:?]{0,40}? # max 40 signs behind keyword/parantheses, without :
     )(?<!\\b[a-zäöüß]{1,10}): # end 1 group to keep before NO lowercase word :",
     dotall = TRUE, comments = TRUE
@@ -268,7 +270,8 @@ pt_prep <- lapply(1:19, function(row) { # seq_len(nrow(pt_smpl))
 saveRDS(pt_prep, file = "../data/tmp_smpl.RDS")
 pt_prep <- readRDS("../data/tmp_smpl.RDS")
 
-
+# 8297 - 1065
+# 8341 - 524
 b <- bind_rows(pt_prep)
 
 
@@ -284,7 +287,7 @@ textout <- function(num) {
 
 textout(2)
 
-a <- pt_smpl$text[90]
+a <- pt_smpl$text[pt_smpl$id == 3899]
 View(a)
 
 
@@ -300,6 +303,10 @@ library(quanteda)
 
 test2 <- tokens(corpus(unlist(pt_prep)))
 test3 <- kwic(test2, "SPLIT1", window = 10)
+
+test2 <- tokens(corpus(b))
+test3 <- kwic(test2, ":", window = 10)
+
 
 
 # ! check Text 19: wrong Split just name
