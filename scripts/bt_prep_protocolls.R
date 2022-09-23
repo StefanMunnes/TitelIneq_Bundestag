@@ -28,21 +28,21 @@ df_notext <- select(pt_smpl, !text)
 
 members <- readRDS("../data/members.RDS")
 
-# members_correct <- filter(
-#   members,
-#   nachname %in% c(
-#     "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
-#     "Jaeger"
-#   )
-# ) |>
-#   mutate(nachname = case_when(
-#     nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
-#     nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
-#     nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
-#     nachname == "Jaeger" ~ "jaeger" # wrong in text
-#   ))
+members_correct <- filter(
+  members,
+  nachname %in% c(
+    "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
+    "Jaeger"
+  )
+) |>
+  mutate(nachname = case_when(
+    nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
+    nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
+    nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
+    nachname == "Jaeger" ~ "jaeger" # wrong in text
+  ))
 
-# members <- bind_rows(members, members_correct)
+members <- bind_rows(members, members_correct)
 
 
 
@@ -139,7 +139,7 @@ regex_start <- regex(
 wp <- 1
 regex_n <- get_regex_names(wp)
 
-?pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
+pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
 
   # check wahlperiode -> prepare names for clean-up
   if (pt_smpl$wahlperiode[row] > wp) {
@@ -197,7 +197,7 @@ regex_n <- get_regex_names(wp)
   # mark comments (including names of members); min 5; just last parantheses
   text <- str_replace_all(
     text,
-    regex("\\n?\\([^\\(]*?\\)\\n|\\n\\([^\\(]{18,}?\\)", dotall = TRUE),
+    regex("\\n?\\([^\\(]*?\\)\\s*\\n\\s*|\\n\\([^\\(]{18,}?\\)", dotall = TRUE),
     "\nZWISCHENRUF\n"
   )
 
@@ -208,28 +208,20 @@ regex_n <- get_regex_names(wp)
   #  speaker I: begin of speech: from newline to : with name (keywords/parant.)
   regex_speaker <- regex(
     paste0(
-      "\\n(", # begin of 1 group to keep after linebreak
-      # 1. max 15 signs before name OR
-      "([^\\n:]{0,15}|",
-      # 2. if one of the keywords -> 15 + kw + 22 before
-      "([^\\n:]{0,15}",
-      "((Vize)*[Pp]räsident|Herr|Frau|Dr|(Staats|Bundes)*[Mm]inister|Staatssekretär|Freiherr|Prinz|Graf)",
-      "[^:]{0,22}))", # \\n removed: check
-      # Abgeordnete and linkebreak not allowed to appear before name
-      "(?<!Abgeordnete.{1,35}?[^\\n])",
-      # all surnames of wp in or parantheses
-      "(", regex_n, ")",
-      # just max 3 signs between name and : or following optional keywords
-      "[^\\n.]{0,3}?",
-      # 1. if one of the keywords -> 20 + kw + 75 signs (also newline) OR
-      "(([^:.]{0,20}?((Staats|Bundes)*[Mm]inister|(Parl\\.\\s*)Staatssekretär|Senator).{0,75}?)|",
+      "\\n[:space:]*(",
+      "(Vize)?[Pp]räsident[^\\n]{1,35}(", regex_n, ").{0,3}",
+      "|",
+      "[^\\n]{0,35}?(", regex_n, ").{1,3}",
+      "(",
+      # 1. if one of the keywords -> kw + 75 signs (also newline) OR
+      "((Staats|Bundes)*(schatz)*[Mm]inister|Senator|",
+      "(Parl\\.\\s?|Parlamentarische(r)?\\s?)Staatssekretär)[^:]{0,75}?|",
       # 2. if one of the keywords -> max 3 additional signs OR
-      "((Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant).{0,3})|",
-      # 3. if parantheses behind name (party; city) -> both max 40 + add 3
-      "(\\([^\\n:]{0,40}\\).{0,3}?|", # without : before and in ()
-      ".{0,3}?\\([^\\n]{0,7}\\).{0,3}?)", # OR with : but max 3 before ()
-      ")*", # close optional keyword/parantheses
-      "):" # end main group to keep before :
+      "(Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant)|",
+      # 3. if parantheses behind name (party; city) -> both max 40
+      "\\([^\\n:]{0,40}\\)", # without : before and in ()
+      ").?",
+      "):"
     ),
     dotall = TRUE
   )
@@ -270,12 +262,11 @@ regex_n <- get_regex_names(wp)
 saveRDS(pt_prep, file = "../data/tmp_smpl.RDS")
 pt_prep <- readRDS("../data/tmp_smpl.RDS")
 
-# 8297 - 1065
-# 8341 - 524
+# 8390 - 136
 b <- bind_rows(pt_prep)
 
 
-c <- pt_prep[[2]]
+c <- pt_prep[[1]]
 View(c)
 
 
@@ -285,9 +276,9 @@ textout <- function(num) {
   close(file)
 }
 
-textout(2)
+textout(4)
 
-a <- pt_smpl$text[pt_smpl$id == 3899]
+a <- pt_smpl$text[pt_smpl$id == 4264]
 View(a)
 
 
