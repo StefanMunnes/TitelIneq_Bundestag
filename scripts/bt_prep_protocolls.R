@@ -6,7 +6,7 @@ library(stringr)
 setwd("scripts/")
 
 
-# df <- readRDS("C:/Users/munnes/Data/plenarprotokolle.RDS")
+pt_all <- readRDS("C:/Users/munnes/Data/plenarprotokolle.RDS")
 # # df <- readRDS("M:/group/DSI/AF/_Data/BT_protokolle/plenarprotokolle.RDS")
 
 # pt_smpl <- group_by(pt, wahlperiode) |>
@@ -14,35 +14,36 @@ setwd("scripts/")
 
 # saveRDS(pt_smpl, file = "../data/pt_smpl.RDS")
 
+# pt_smpl <- readRDS("../data/pt_smpl.RDS")
 
-pt_smpl <- readRDS("../data/pt_smpl.RDS")
+# set.seed(1245)
 
-set.seed(1245)
+# pt_smpl <- group_by(pt_smpl, wahlperiode) |>
+#   slice_sample(n = 2) |>
+#   ungroup()
 
-pt_smpl <- group_by(pt_smpl, wahlperiode) |>
-  slice_sample(n = 2) |>
-  ungroup()
-
-df_notext <- select(pt_smpl, !text)
+# df_notext <- select(pt_smpl, !text)
 
 
 members <- readRDS("../data/members.RDS")
 
-members_correct <- filter(
-  members,
-  nachname %in% c(
-    "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
-    "Jaeger"
-  )
-) |>
-  mutate(nachname = case_when(
-    nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
-    nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
-    nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
-    nachname == "Jaeger" ~ "jaeger" # wrong in text
-  ))
+# ! Dağdelen to Dagdelen
 
-members <- bind_rows(members, members_correct)
+# members_correct <- filter(
+#   members,
+#   nachname %in% c(
+#     "Löwenstein-Wertheim-Freudenberg", "Missmahl", "Gerstenmaier",
+#     "Jaeger"
+#   )
+# ) |>
+#   mutate(nachname = case_when(
+#     nachname == "Löwenstein-Wertheim-Freudenberg" ~ "Löwenstein",
+#     nachname == "Missmahl" ~ "M[ai]ßmahl", # wrong in text, a and ß
+#     nachname == "Gerstenmaier" ~ "Gerstenmaler", # wrong in text
+#     nachname == "Jaeger" ~ "jaeger" # wrong in text
+#   ))
+
+# members <- bind_rows(members, members_correct)
 
 
 
@@ -61,7 +62,7 @@ get_regex_names <- function(w) {
 }
 
 
-remove_header <- function(text_raw = text, rex_name = regex_n) {
+remove_header <- function(text_raw = text, rex_name = regex_n, w = wp) {
 
   # remove main part of header (Deutscher Bundestag, session, place, date)
   regex_header_base <- regex("
@@ -95,11 +96,11 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
 
 
   # remove name of speaker under/above header if splited speech
-  if (wp < 18) { # WP 1- WP 17: names behind header:
+  if (w < 18) { # WP 1- WP 17: names behind header:
     # e.g. HEADER\n Pau; (Pau); (Pau [Berlin]);  Pau (Berlin)
     text_raw <- gsub(
       paste0(
-        "\\n+HEADER\\s+.{0,42}?",
+        "\\n+HEADER\\s+.{0,42}",
         "(", rex_name, ")",
         "(?!.*(:|Staatssekretär))", # anything behind name except speaker signs
         "((\\s(\\[|\\().*?(\\]|\\)))*\\)*\\s*)*"
@@ -129,141 +130,177 @@ remove_header <- function(text_raw = text, rex_name = regex_n) {
 
 regex_start <- regex(
   "^.*?
-  (Die\\sSitzung\\swird.+?eröffnet\\.|Beginn:.*?Uhr\\.*)\\s{0,4}
-  ((Vize)*[Pp]räsident)",
+  (Die\\sSitzung\\swird.*?|Beginn.*?Uhr).*?
+  ((Vize|Alters)*[Pp]räsident(in)?\\s)",
   comments = TRUE, dotall = TRUE
 )
 
+regex_speaker <- paste0(
+  "\\n *(",
+  "[A-Z][^\\n,]{2,50}",
+  "(\\([^\\n:,]{1,40}\\))?",
+  "( *, *",
+  "(((Staats|Bundes)?(schatz)?[Mm]inister|Senator|",
+  "(Parl(\\.|amentarische(r)?) ?)?Staatssekretär)[^:]{0,75}?)|",
+  "Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant",
+  ")?",
+  "(?<! [a-zäöüß—-]{1,10})",
+  "):"
+)
 
-# init correct Wahlperiode and names
-wp <- 1
-regex_n <- get_regex_names(wp)
 
-pt_prep <- lapply(1:38, function(row) { # seq_len(nrow(pt_smpl))
+# SPEAKER: chair (without name) -> reduce missing extraction
+regex_chair <- "\\n((Vize|Alters)?[Pp]räsident[^\\n]{1,40}):"
 
-  # check wahlperiode -> prepare names for clean-up
-  if (pt_smpl$wahlperiode[row] > wp) {
-    wp <<- pt_smpl$wahlperiode[row]
-    regex_n <<- get_regex_names(wp)
+regex_speaker_noname <- regex(
+  "\\n # begin of first group to keep after linebreak;
+      # no ( in Beginning; noSPLIT, Abgeordnete, Drucksache or . before linebreak
+      (?!\\s*\\(|.{0,35}(SPLIT|Abgeordnete|Drucksache)|\\.[:space:]*\\n)
+      ( # start of 1 group to keep
+      [^\\n:?]{0,25}? # max 15 signs before Keywords
+      ((,\\s+((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator))| # Keywords OR
+      \\([^\\n:]{0,50}?\\)) # paranthese
+      [^:?—]{0,40}? # max 40 signs behind keyword/parantheses, without :
+      )(?<!\\b[a-zäöüß—]{1,10}): # end 1 group to keep before NO lowercase word :",
+  dotall = TRUE, comments = TRUE
+)
 
-    message("Neue Wahlperiode -> neue Namen zu entfernen")
-  }
 
-  message("Wahlperiode: ", wp, ", Text: ", row)
+lapply(c(4, 8, 12, 17), function(wp) { # unique(pt_smpl$wahlperiode)
 
-  text <- pt_smpl$text[row]
+  pt_wp <- pt_all[pt_all$wahlperiode == wp, ] |>
+    arrange(dokumentnummer)
 
-  # remove all stuff befor begin (e.g table of content)
-  if (str_detect(text, regex_start)) {
-    text <- str_replace(text, regex_start, "\\2")
-  } else { # WP 14: zT ist Beginn verutscht auf die 2. Seite, mitten im Text
+  regex_n <- get_regex_names(wp)
 
+  # speaker I: begin of speech: from newline to : with name (keywords/parant.)
+  regex_speaker_paranthese <- paste0(
+    "[\\n.] *(", # after linebreak -> start first group = keep
+    "(?!SPLIT|Abgeordnet|Frage|[?!])", # no split|Abgeordnet|Frage inclduded
+    "(([A-ZÄÖÜ]|von)[^\\n,]{0,35})?", # before name: start with uppercase or von
+    "(", regex_n, ")", # names with or in parantheses
+    "(.{0,3}\\([^\\n:]{1,40}\\) *)", # parantheses without linebreak
+    "( *, *", # optional group start after comma, keywords without following
+    "(Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant)",
+    ")?", # end  optional group
+    "):" # end first keep group
+  )
+
+  regex_speaker_minister <- paste0(
+    "[\\n.] *(", # after linebreak -> start first group = keep
+    "(?!SPLIT|Abgeordnet|Frage)", # no split inclduded
+    "([A-ZÄÖÜ][^\\n,]{0,35})?", # before name: start with uppercase, no linebr.
+    "(", regex_n, ")", # names with or in parantheses
+    "( *, *(", # group with two options start after comma:
+    # 1. keywords with possible longer part following
+    "(((Staats|Bundes)?(schatz)?[Mm]inister|Senator|",
+    "(Parl( *\\.|amentarische(r)?) ?)?Staatssekretär)[^:]{0,75}?)|",
+    # 2. keywords without anything following
+    "Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant",
+    "))", # end optional group
+    "):" # end first keep group
+  )
+
+
+  message("Wahlperiode ", wp, ", # von Texten: ", nrow(pt_wp))
+
+
+  pt_wp_split_ls <- lapply(1:2, function(row) { # seq_len(nrow(pt_wp))
+    message(row)
+
+    text <- pt_wp$text[row]
+
+    # remove unecessary linebreaks and space
+    text <- str_remove_all(text, "-\\n+(?=[:lower:])") |> # word split in lower
+      str_remove_all("(?<=[A-ZÄÖÜ])-\\n+(?=[A-ZÄÖÜ])") |> # word split UPPER
+      # multiple spaces/linebreaks before/after parantheses to
+      str_replace_all(c(
+        " *\\n+ *\\(" = "\n(",
+        "\\) *\\n+ *" = ")\n"
+      )) |>
+      str_remove_all(" (?=-[A-ZÖÄÜ])") |> # wrong space before -
+      str_replace_all(" +", " ") # trim whitespace to single one
+
+
+    # remove all stuff befor begin (e.g table of content)
+    if (str_detect(text, regex_start)) {
+      text <- str_replace(text, regex_start, "\\2")
+    } else { # WP 14: zT ist Beginn verutscht auf die 2. Seite, mitten im Text
+
+      text <- gsub(
+        paste0(
+          "^.*?Deutscher\\sBundestag.*?Sitzung.*?[0-9]{4,4}",
+          ".*?\\n*?(Vize|Alters)?[Pp]räsident"
+        ),
+        "\\1", text
+      )
+
+      text <- gsub("\\nBeginn:.{,6}Uhr\\n", "\n", text)
+    }
+
+
+    # remove end of session and everythin behind (e.g. appendix)
+    # (Schluß der 'Sitzung: 21.04 Uhr.)
     text <- gsub(
-      paste0(
-        "^.*?Deutscher\\sBundestag.*?Sitzung.*?[0-9]{4,4}",
-        ".*?\\n*?(Präsident|Vizepräsident)"
-      ),
-      "\\1", text
+      "\\n\\(Schlu(ss|ß)( der [']*Sitzung)*:*.{,4}[0-9]+\\s*Uhr.{,20}\\).*?$",
+      "", text
     )
 
-    text <- gsub("\\nBeginn:.{,6}Uhr\\n", "\n", text)
-  }
+
+    # footenotes, e.g. *) Siehe Anlage 8.
+    text <- gsub("\\n\\*+\\)\\sSiehe Anlage\\s[0-9]+\\.*\\s*", "", text)
 
 
-  # remove end of session and everythin behind (e.g. appendix)
-  # (Schluß der 'Sitzung: 21.04 Uhr.)
-  text <- gsub(
-    "\\n\\(Schlu(ss|ß)( der [']*Sitzung)*:*.{,4}[0-9]+\\s*Uhr.{,20}\\).*?$",
-    "", text
+    # mark comments (including names of members); min 5; just last parantheses
+    text <- str_replace_all(
+      text,
+      "\\n?\\([^\\(]{2,}?\\) *\\n *|\\n\\([^\\(]{18,}?\\)",
+      "\nZWISCHENRUF\n"
+    )
+
+    # remove header (with pages, names, and sub-page-markers)
+    text <- remove_header(text, rex_name = regex_n, w = wp)
+
+
+    text_split <- str_replace_all(text, regex_chair, "\nSPLIT1\\1SPLIT2\n") |>
+      str_replace("(^.*?):", "\\1SPLIT2\n") |> # first speaker (just SPLIT2)
+      str_replace_all(regex_speaker_paranthese, "\nSPLIT1\\1SPLIT2\n") |>
+      str_replace_all(regex_speaker_minister, "\nSPLIT1\\1SPLIT2\n") |>
+      str_replace_all(regex_speaker_noname, "\nSPLIT1XXX\\2SPLIT2\n")
+
+
+    # split text in speeches and separate speaker in rows
+    split_ls <- str_split(text_split, "SPLIT1")
+
+    split_df <- as.data.frame(split_ls, col.names = "text") |>
+      separate(text, into = c("speaker", "text"), sep = "SPLIT2") |>
+      cbind(
+        pt_wp[row, c("id", "pdf_url", "wahlperiode", "datum", "titel")],
+        row.names = NULL
+      )
+
+
+    return(split_df)
+  })
+
+  pt_wp_split_df <- bind_rows(pt_wp_split_ls)
+
+  saveRDS(
+    pt_wp_split_df,
+    file = paste0("C:/Users/munnes/Data/pt_split_", wp, ".RDS")
   )
-
-
-  # footenotes, e.g. *) Siehe Anlage 8.
-  text <- gsub("\\n\\*+\\)\\sSiehe Anlage\\s[0-9]+\\.*\\s*", "", text)
-
-
-  # # remove unecessary linebreaks and space
-  text <- str_remove_all(text, "-\\n+(?=[:lower:])") |> # word split in lower
-    str_remove_all("(?<=[A-ZÄÖÜ])-\\n+(?=[A-ZÄÖÜ])") |> # word split UPPER
-    # multiple spaces/linebreaks before/after parantheses to
-    str_replace_all(c(
-      " *\\n+ *\\(" = "\n(",
-      "\\) *\\n+ *" = ")\n"
-    )) |>
-    str_remove_all(" (?=-[A-ZÖÄÜ])") |> # wrong space before -
-    str_replace_all(" +", " ") # trim whitespace to single one
-
-
-  # mark comments (including names of members); min 5; just last parantheses
-  text <- str_replace_all(
-    text,
-    regex("\\n?\\([^\\(]*?\\)\\s*\\n\\s*|\\n\\([^\\(]{18,}?\\)", dotall = TRUE),
-    "\nZWISCHENRUF\n"
-  )
-
-  # remove header (with pages, names, and sub-page-markers)
-  text <- remove_header(text)
-
-
-  #  speaker I: begin of speech: from newline to : with name (keywords/parant.)
-  regex_speaker <- regex(
-    paste0(
-      "\\n[:space:]*(",
-      "(Vize)?[Pp]räsident[^\\n]{1,35}(", regex_n, ").{0,3}",
-      "|",
-      "[^\\n]{0,35}?(", regex_n, ").{1,3}",
-      "(",
-      # 1. if one of the keywords -> kw + 75 signs (also newline) OR
-      "((Staats|Bundes)*(schatz)*[Mm]inister|Senator|",
-      "(Parl\\.\\s?|Parlamentarische(r)?\\s?)Staatssekretär)[^:]{0,75}?|",
-      # 2. if one of the keywords -> max 3 additional signs OR
-      "(Antragsteller|Anfragender|Berichterstatter|Schriftführer|Interpellant)|",
-      # 3. if parantheses behind name (party; city) -> both max 40
-      "\\([^\\n:]{0,40}\\)", # without : before and in ()
-      ").?",
-      "):"
-    ),
-    dotall = TRUE
-  )
-
-  text <- str_replace_all(text, regex_speaker, "\nSPLIT1\\1SPLIT2\n") |>
-    str_replace("(^.*?):", "\\1SPLIT2") # first initial speaker (no linebreak)
-
-
-  # speaker II: detect speakers that not appear with name from members list
-  regex_speaker_noname <- regex(
-    "\\n # begin of first group to keep after linebreak;
-    # no ( in Beginning; noSPLIT, Abgeordnete, Drucksache or . before linebreak
-    (?!\\s*\\(|.{1,35}SPLIT|.{1,35}Abgeordnete|.{1,35}Drucksache|.{1,35}\\.[:space:]*\\n)
-    ( # start of 1 group to keep
-    [^\\n:?]{0,25}? # max 15 signs before Keywords
-    ((,\\s+((Staats|Bundes)*[Mm]inister|Staatssekretär|Senator))| # Keywords OR
-    \\([^\\n:]{0,50}?\\)) # paranthese
-    [^:?]{0,40}? # max 40 signs behind keyword/parantheses, without :
-    )(?<!\\b[a-zäöüß]{1,10}): # end 1 group to keep before NO lowercase word :",
-    dotall = TRUE, comments = TRUE
-  )
-
-  text <- str_replace_all(text, regex_speaker_noname, "\nSPLIT1XXX\\1SPLIT2\n")
-
-
-  # split text in speeches and separate speaker in rows
-  split_ls <- str_split(text, "SPLIT1")
-
-  split_df <- as.data.frame(split_ls, col.names = "text") |>
-    separate(text, into = c("speaker", "text"), sep = "SPLIT2") |>
-    cbind(pt_smpl[row, c("id", "pdf_url", "wahlperiode", "datum", "titel")])
-
-
-  return(split_df)
 })
+
 
 
 saveRDS(pt_prep, file = "../data/tmp_smpl.RDS")
 pt_prep <- readRDS("../data/tmp_smpl.RDS")
 
 # 8390 - 136
+# 8491 - 100
+# 8407 - 99
 b <- bind_rows(pt_prep)
+c <- distinct(b, speaker)
 
 
 c <- pt_prep[[1]]
@@ -276,9 +313,11 @@ textout <- function(num) {
   close(file)
 }
 
-textout(4)
+textout(1)
 
-a <- pt_smpl$text[pt_smpl$id == 4264]
+a <- pt_smpl$text[1]
+a <- pt_smpl$text[pt_smpl$id == 371]
+a <- b[7280, ]
 View(a)
 
 
